@@ -39,8 +39,8 @@ bern_gen <- function(p, n){
 ### Parameters:
 ###     mu: vector of means 
 ###     sigma2: vector of variances
-###     n: number of realizations to generate from the Bernoulli distribution 
-###        for each probability p
+###     n: number of realizations to generate from the normal distribution 
+###        for each mu/sigma2 pair
 ###
 ###
 ### Output: 
