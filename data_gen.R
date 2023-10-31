@@ -6,7 +6,6 @@
 ###     n: number of realizations to generate from the Bernoulli distribution 
 ###        for each probability p
 ###
-###
 ### Output: 
 ###     bern_mat: Matrix with n+2 columns and length(p) rows. One row for each
 ###         value in the p input vector. The first n columns contain realizations
@@ -83,21 +82,18 @@ norm_gen <- function(mu, sigma2, n){
   
 }
 
-
-
 set.seed(9377)
 
 ### Bernoulli test (beta prior)
 n = 1e4
-reps = 30
+reps = 500
 p = rbeta(n, 3, 1)
-bern_gen(n = reps, p)
-
+b_mat <- bern_gen(n = reps, p)
+mse <- (b_mat[,502] - b_mat[,501])^2
+mean(mse)
+hist(mse)
 
 ### Normal test (normal prior (mean))
 mu = rnorm(n, 0, 1)
 sigma2 <- rep(10, n)
 norm_gen(mu, sigma2, n = reps)
-
-
-
