@@ -1,3 +1,5 @@
+set.seed(8053)
+
 ### Simulation 1: 
 ### Gaussian prior, into gaussian distribution 
 
