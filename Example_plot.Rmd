@@ -1,0 +1,62 @@
+---
+title: "Example_Plot"
+author: "Hyun Jung (HJ) Koo"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+norm_pair_gen <- function(n,sigma, mu, tau) {
+  pairs_x <- c()
+  pairs_theta <- c()
+  for (i in 1:n) {
+    pairs_theta[i] <- rnorm(1, mean = mu, sd = tau)
+    pairs_x[i] <- rnorm(1, mean = pairs_theta[i], sd = sigma)
+  }
+  pair <- cbind(pairs_x, pairs_theta)
+  return(pair)
+}
+```
+
+```{r}
+# Different values of p 
+case_1_p <- function(p,sigma, mu, tau) {
+  MSE_bayes_a <- c()
+  MSE_bayes_b <- c()
+  MSE_EB <- c()
+  for (i in 1:p) { 
+    norm0 <- norm_pair_gen(i+2,sigma, mu, tau)
+    norm0 <- as.data.frame(norm0)
+    bayes_a_post_mean <- (tau^2/(tau^2+sigma^2))*norm0$pairs_x + (sigma^2/(tau^2+sigma^2))*mu  
+    bayes_b_post_mean <- norm0$pairs_x
+    EB_post_mean <- (1-(((i-1)*sigma^2)/sum((norm0$pairs_x-mean(norm0$pairs_x))^2)))*norm0$pairs_x+((((i-1)*sigma^2)/sum((norm0$pairs_x-mean(norm0$pairs_x))^2)))*mean(norm0$pairs_x)
+    MSE_bayes_a[i] <- mean((norm0$pairs_theta-bayes_a_post_mean)^2)
+    MSE_bayes_b[i] <- mean((norm0$pairs_theta-bayes_b_post_mean)^2)
+    MSE_EB[i] <- mean((norm0$pairs_theta-EB_post_mean)^2)
+  }
+  MSE <- cbind(MSE_bayes_a, MSE_bayes_b, MSE_EB)
+  return(MSE)
+}
+```
+
+```{r}
+set.seed(1234)
+p = 1000
+sigma = 1
+mu <- 1
+tau <- 1
+test_p <- case_1_p(p,sigma,mu,tau)
+```
+
+```{r}
+test_p_1 <- cbind(test_p,seq(from=1,to =1000, by =1))
+plot(x=test_p_1[,4],y=test_p_1[,1], type="l")
+plot(x=test_p_1[,4], y=test_p_1[,2], col="blue", type="l",ylim=range(c(test_p_1[,2],test_p_1[,3])))
+lines(x=test_p_1[,4], y=test_p_1[,3], col="red")
+lines(x=test_p_1[,4], y=test_p_1[,1], col="green")
+plot(x=test_p_1[,4], y=test_p_1[,3], col="red", type ="l")
+```
