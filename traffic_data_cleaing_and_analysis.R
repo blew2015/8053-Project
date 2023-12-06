@@ -63,7 +63,8 @@ for (b in 1:B){
   }
 }
 
-plot(rowMeans(mat_e))
-plot(rowMeans(mat_f))
+plot(rowMeans(mat_e, na.rm = TRUE))
+plot(rowMeans(mat_f, na.rm = TRUE))
 
+plot(rowMeans(mat_f, na.rm = TRUE) - rowMeans(mat_e, na.rm = TRUE))
 hist(count_by_month_2$count)
