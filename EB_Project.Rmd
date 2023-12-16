@@ -323,7 +323,7 @@ ggplot(plot_data_mean, aes(x=test_n_1)) + geom_line(aes(y=MSE_bayes_a_total_mean
                      labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB")) +
   scale_linetype_manual(values = c("solid", "dotdash", "twodash", "dotted"),
                         name = "Groups",
-                        labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB"))+ geom_ribbon(aes(ymin=MSE_bayes_a_total_ci$lower, ymax=MSE_bayes_a_total_ci$upper), linetype=3, alpha=0.2)+ geom_ribbon(aes(ymin=MSE_bayes_b_total_ci$lower, ymax=MSE_bayes_b_total_ci$upper), linetype=5, alpha=0.2)+ geom_ribbon(aes(ymin=MSE_EB_total_ci$lower, ymax=MSE_EB_total_ci$upper), linetype=2, alpha=0.2)+ geom_ribbon(aes(ymin=MSE_NP_total_ci$lower, ymax=MSE_NP_total_ci$upper), linetype=2, alpha=0.2)#+ylim(0.05,0.30)+xlim(4,15)
+                        labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB"))+ geom_ribbon(aes(ymin=MSE_bayes_a_total_ci$lower, ymax=MSE_bayes_a_total_ci$upper), linetype=3, alpha=0.2, fill="red")+ geom_ribbon(aes(ymin=MSE_bayes_b_total_ci$lower, ymax=MSE_bayes_b_total_ci$upper), linetype=5, alpha=0.2, fill="orange")+ geom_ribbon(aes(ymin=MSE_EB_total_ci$lower, ymax=MSE_EB_total_ci$upper), linetype=2, alpha=0.2, fill="blue")+ geom_ribbon(aes(ymin=MSE_NP_total_ci$lower, ymax=MSE_NP_total_ci$upper), linetype=2, alpha=0.2, fill="purple")#+ylim(0.05,0.30)+xlim(4,15)
 dev.off()
 
 ```
@@ -908,8 +908,35 @@ dev.off()
 ```
 
 ```{r}
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN2_RR_p_mag12.png",width=600, height=350)
+ggplot(plot_data_ext_p_mean, aes(x=test_ext_p_1)) + geom_line(aes(y=MSE_bayes_a_total_ext_p_mean,color="Group 1", linetype="Group 1"),size=0.7) + geom_line(aes(y=MSE_bayes_b_total_ext_p_mean,color="Group 2", linetype="Group 2"),size=0.7) + geom_line(aes(y=MSE_EB_total_ext_p_mean,color="Group 3", linetype="Group 3"),size=0.7) + geom_line(aes(y=MSE_NP_total_ext_p_mean,color="Group 4", linetype="Group 4"),size=0.7) +  labs(title = "Varying Number of groups", x = "Number of groups",y = "Average MSE") +
+  scale_color_manual(values = c("red", "orange", "blue", "purple"),
+                     name = "Groups",
+                     labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB")) +
+  scale_linetype_manual(values = c("solid", "dotdash", "twodash", "dotted"),
+                        name = "Groups",
+                        labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB"))
+dev.off()
 
-png(file="/Users/hjkoo/Desktop/8053 Final Project/Plots/NN2_p_RR_f.png",
+```
+
+```{r}
+
+png(file="/Users/hjkoo/Desktop/8053 Final Project/Plots/NN2_p_RR_f2.png",
+    width=600, height=350)
+ggplot(plot_data_ext_p_mean_trunc, aes(x=test_ext_p_1)) + geom_line(aes(y=MSE_bayes_a_total_ext_p_mean,color="Group 1", linetype="Group 1"),size=1) + geom_line(aes(y=MSE_bayes_b_total_ext_p_mean,color="Group 2", linetype="Group 2"),size=1) + geom_line(aes(y=MSE_EB_total_ext_p_mean,color="Group 3", linetype="Group 3"),size=1) + geom_line(aes(y=MSE_NP_total_ext_p_mean,color="Group 4", linetype="Group 4"),size=1) +  labs(title = "Varying Number of groups", x = "Number of groups",y = "Average MSE") +
+  scale_color_manual(values = c("red", "blue", "green4", "purple"),
+                     name = "Groups",
+                     labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB")) +
+  scale_linetype_manual(values = c("solid", "dashed", "dotted", "dotdash"),
+                        name = "Groups",
+                        labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB"))
+dev.off()
+
+```
+```{r}
+
+png(file="/Users/hjkoo/Desktop/8053 Final Project/Plots/NN2_p_RR_f2.png",
     width=600, height=350)
 ggplot(plot_data_ext_p_mean_trunc, aes(x=test_ext_p_1)) + geom_line(aes(y=MSE_bayes_a_total_ext_p_mean,color="Group 1", linetype="Group 1"),size=1) + geom_line(aes(y=MSE_bayes_b_total_ext_p_mean,color="Group 2", linetype="Group 2"),size=1) + geom_line(aes(y=MSE_EB_total_ext_p_mean,color="Group 3", linetype="Group 3"),size=1) + geom_line(aes(y=MSE_NP_total_ext_p_mean,color="Group 4", linetype="Group 4"),size=1) +  labs(title = "Varying Number of groups", x = "Number of groups",y = "Average MSE") +
   scale_color_manual(values = c("red", "blue", "green4", "purple"),
