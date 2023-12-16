@@ -10,8 +10,11 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-source("data_gen.R") # Data simulation
+library(sfsmisc) # for marginal density estimation
+library(ks) # for kde and derivative of kde
+library(ggplot2)
 ```
+
 
 ## Data Simulation
 
@@ -26,16 +29,18 @@ We can simulate 10000 data points and then divide into training (70%) and testin
 
 (c) Empirical Bayes. $\mu, \tau^2$ are both unknown and will be estimated from the data.
 
+(d) Nonparametric Empirical Bayes - using kernel density estimation
+
 Our goal is to estimate $E(\theta_i|X_i)$, i.e. the posterior mean. 
 
 Sampling in pairs $(X_i, \theta_i)$.
 ```{r}
-norm_pair_gen <- function(n,theta,sigma, mu, tau) {
+norm_pair_gen <- function(n,sigma, mu, tau) {
   pairs_x <- c()
   pairs_theta <- c()
   for (i in 1:n) {
-    pairs_x[i] <- rnorm(1, mean = theta, sd = sigma)
     pairs_theta[i] <- rnorm(1, mean = mu, sd = tau)
+    pairs_x[i] <- rnorm(1, mean = pairs_theta[i], sd = sigma)
   }
   pair <- cbind(pairs_x, pairs_theta)
   return(pair)
@@ -49,7 +54,7 @@ tau = 1
 sigma = 1
 theta = 0
 n = 10000
-norm_1 <- norm_pair_gen(10000, theta, sigma, mu, tau)
+norm_1 <- norm_pair_gen(10000, sigma, mu, tau)
 norm_1 <- as.data.frame(norm_1)
 ```
 
@@ -71,6 +76,13 @@ hist(train$pairs_theta)
 xbar <- mean(train$pairs_x)
 ```
 
+```{r}
+set.seed(1234)
+n=1000
+norm_1 <- norm_pair_gen(n, sigma, mu, tau)
+norm_1 <- as.data.frame(norm_1)
+```
+
 
 Posterior mean of Bayesian approach (a): $\frac{\tau^2}{\tau^2+\sigma^2}X_i+\frac{\sigma^2}{\tau^2+\sigma^2}\mu$
 
@@ -87,21 +99,1107 @@ bayes_b_post_mean <- norm_1$pairs_x
 Posterior mean of Empirical Bayes: $(1-\frac{(n-3)\sigma^2}{\sum(X_i-\bar{X})^2})X_i+\frac{(n-3)\sigma^2}{\sum(X_i-\bar{X})^2}\bar{X}$
 
 ```{r}
-EB_post_mean <- (1-(((n-3)*sigma^2)/sum((norm_1$pairs_x-mean(norm_1$pairs_x))^2)))*norm_1$pairs_x+((((n-3)*sigma^2)/sum((norm_1$pairs_x-mean(norm_1$pairs_x))^2)))*mean(norm_1$pairs_x)
+EB_post_mean <- (1-(((n-3)*(sigma^2))/sum((norm_1$pairs_x-mean(norm_1$pairs_x))^2)))*norm_1$pairs_x+((((n-3)*sigma^2)/sum((norm_1$pairs_x-mean(norm_1$pairs_x))^2)))*mean(norm_1$pairs_x)
 ```
 
 Calculating the MSE. The true $\theta_i=\mu=0$
 
 ```{r}
-MSE_bayes_a <- mean((bayes_a_post_mean)^2)
-MSE_bayes_b <- mean((bayes_b_post_mean)^2)
-MSE_EB <- mean((EB_post_mean)^2)
+MSE_bayes_a <- mean((norm_1$pairs_theta-bayes_a_post_mean)^2)
+MSE_bayes_b <- mean((norm_1$pairs_theta-bayes_b_post_mean)^2)
+MSE_EB <- mean((norm_1$pairs_theta-EB_post_mean)^2)
+```
+
+```{r}
+plot(x=EB_post_mean, y=bayes_b_post_mean)
+abline(a=0, b=1)
+
+plot(x=EB_post_mean, y=bayes_a_post_mean)
+abline(a=0, b=1)
 ```
 
 
 Now writing a function to do everything together with varying sample sizes.
 ```{r}
+case_1 <- function(n,sigma,mu,tau) {
+  MSE_bayes_a <- c()
+  MSE_bayes_b <- c()
+  MSE_EB <- c()
+  MSE_NP <- c()
+  for (i in 10:n) { # Need to have at least the number of parameters
+    norm0 <- norm_pair_gen(i,sigma, mu, tau)
+    norm0 <- as.data.frame(norm0)
+    bayes_a_post_mean <- (tau^2/(tau^2+sigma^2))*norm0$pairs_x + (sigma^2/(tau^2+sigma^2))*mu  
+    bayes_b_post_mean <- norm0$pairs_x
+    EB_post_mean <- (1-(((i-3)*sigma^2)/sum((norm0$pairs_x-mean(norm0$pairs_x))^2)))*norm0$pairs_x+((((i-3)*sigma^2)/sum((norm0$pairs_x-mean(norm0$pairs_x))^2)))*mean(norm0$pairs_x)
+    
+    ## NP EB
+    X_norm_ordered <- sort(norm0$pairs_x)
+    fx <- kde(X_norm_ordered, eval.points = X_norm_ordered)
+    fx_d <- kdde(X_norm_ordered, deriv.order = 1, eval.points = X_norm_ordered)
+    
+    score <- fx_d$estimate/fx$estimate
+    
+    ## Tweedie's formula (E(\theta|X) = x+sigma^2*score(x))
+    theta_hat <- mean(fx$eval.points+sigma^2*score)
+    
+    theta_hat_raw <- fx$eval.points+sigma^2*score
+
+    MSE_NP[i] <- mean((norm0$pairs_theta-theta_hat_raw)^2)
+    
+    MSE_bayes_a[i] <- mean((norm0$pairs_theta-bayes_a_post_mean)^2)
+    MSE_bayes_b[i] <- mean((norm0$pairs_theta-bayes_b_post_mean)^2)
+    MSE_EB[i] <- mean((norm0$pairs_theta-EB_post_mean)^2)
+  }
+  MSE <- cbind(MSE_bayes_a, MSE_bayes_b, MSE_EB, MSE_NP)
+  return(MSE)
+}
+```
+
+```{r}
+# Different values of mu (vector)
+case_1_mu <- function(p,sigma, mu, tau) {
+  MSE_bayes_a <- c()
+  MSE_bayes_b <- c()
+  MSE_EB <- c()
+  MSE_NP <- c()
+  for (i in 1:length(mu)) { 
+    norm0 <- norm_pair_gen(p,sigma, mu[i], tau)
+    norm0 <- as.data.frame(norm0)
+    bayes_a_post_mean <- (tau^2/(tau^2+sigma^2))*norm0$pairs_x + (sigma^2/(tau^2+sigma^2))*mu[i]  
+    bayes_b_post_mean <- norm0$pairs_x
+    EB_post_mean <- (1-(((p-3)*sigma^2)/sum((norm0$pairs_x-mean(norm0$pairs_x))^2)))*norm0$pairs_x+((((p-3)*sigma^2)/sum((norm0$pairs_x-mean(norm0$pairs_x))^2)))*mean(norm0$pairs_x)
+    
+    ## NP EB
+    X_norm_ordered <- sort(norm0$pairs_x)
+    fx <- kde(X_norm_ordered, eval.points = X_norm_ordered)
+    fx_d <- kdde(X_norm_ordered, deriv.order = 1, eval.points = X_norm_ordered)
+    
+    score <- fx_d$estimate/fx$estimate
+    
+    ## Tweedie's formula (E(\theta|X) = x+sigma^2*score(x))
+    theta_hat <- mean(fx$eval.points+sigma^2*score)
+    
+    theta_hat_raw <- fx$eval.points+sigma^2*score
+    
+    MSE_NP[i] <- mean((norm0$pairs_theta-theta_hat_raw)^2)
+    
+    MSE_bayes_a[i] <- mean((norm0$pairs_theta-bayes_a_post_mean)^2)
+    MSE_bayes_b[i] <- mean((norm0$pairs_theta-bayes_b_post_mean)^2)
+    MSE_EB[i] <- mean((norm0$pairs_theta-EB_post_mean)^2)
+  }
+  MSE <- cbind(MSE_bayes_a, MSE_bayes_b, MSE_EB, MSE_NP)
+  return(MSE)
+}
+```
+
+```{r}
+# Different values of tau (vector)
+case_1_tau <- function(p,sigma, mu, tau) {
+  MSE_bayes_a <- c()
+  MSE_bayes_b <- c()
+  MSE_EB <- c()
+  MSE_NP <- c()
+  for (i in 1:length(tau)) { 
+    norm0 <- norm_pair_gen(p,sigma, mu, tau[i])
+    norm0 <- as.data.frame(norm0)
+    bayes_a_post_mean <- (tau[i]^2/(tau[i]^2+sigma^2))*norm0$pairs_x + (sigma^2/(tau[i]^2+sigma^2))*mu  
+    bayes_b_post_mean <- norm0$pairs_x
+    EB_post_mean <- (1-(((p-3)*sigma^2)/sum((norm0$pairs_x-mean(norm0$pairs_x))^2)))*norm0$pairs_x+((((p-3)*sigma^2)/sum((norm0$pairs_x-mean(norm0$pairs_x))^2)))*mean(norm0$pairs_x)
+    
+    ## NP EB
+    X_norm_ordered <- sort(norm0$pairs_x)
+    fx <- kde(X_norm_ordered, eval.points = X_norm_ordered)
+    fx_d <- kdde(X_norm_ordered, deriv.order = 1, eval.points = X_norm_ordered)
+    
+    score <- fx_d$estimate/fx$estimate
+    
+    ## Tweedie's formula (E(\theta|X) = x+sigma^2*score(x))
+    theta_hat <- mean(fx$eval.points+sigma^2*score)
+    
+    theta_hat_raw <- fx$eval.points+sigma^2*score
+    
+    MSE_NP[i] <- mean((norm0$pairs_theta-theta_hat_raw)^2)
+    
+    MSE_bayes_a[i] <- mean((norm0$pairs_theta-bayes_a_post_mean)^2)
+    MSE_bayes_b[i] <- mean((norm0$pairs_theta-bayes_b_post_mean)^2)
+    MSE_EB[i] <- mean((norm0$pairs_theta-EB_post_mean)^2)
+  }
+  MSE <- cbind(MSE_bayes_a, MSE_bayes_b, MSE_EB, MSE_NP)
+  return(MSE)
+}
+```
+
+```{r}
+# Different values of p 
+case_1_p <- function(p,sigma, mu, tau) {
+  MSE_bayes_a <- c()
+  MSE_bayes_b <- c()
+  MSE_EB <- c()
+  MSE_NP <- c()
+  for (i in 1:p) { 
+    norm0 <- norm_pair_gen(i+2,sigma, mu, tau)
+    norm0 <- as.data.frame(norm0)
+    bayes_a_post_mean <- (tau^2/(tau^2+sigma^2))*norm0$pairs_x + (sigma^2/(tau^2+sigma^2))*mu  
+    bayes_b_post_mean <- norm0$pairs_x
+    EB_post_mean <- (1-(((i-1)*sigma^2)/sum((norm0$pairs_x-mean(norm0$pairs_x))^2)))*norm0$pairs_x+((((i-1)*sigma^2)/sum((norm0$pairs_x-mean(norm0$pairs_x))^2)))*mean(norm0$pairs_x)
+    
+    ## NP EB
+    X_norm_ordered <- sort(norm0$pairs_x)
+    fx <- kde(X_norm_ordered, eval.points = X_norm_ordered)
+    fx_d <- kdde(X_norm_ordered, deriv.order = 1, eval.points = X_norm_ordered)
+    
+    score <- fx_d$estimate/fx$estimate
+    
+    ## Tweedie's formula (E(\theta|X) = x+sigma^2*score(x))
+    theta_hat <- mean(fx$eval.points+sigma^2*score)
+    
+    theta_hat_raw <- fx$eval.points+sigma^2*score
+    
+    MSE_NP[i] <- mean((norm0$pairs_theta-theta_hat_raw)^2)
+    
+    MSE_bayes_a[i] <- mean((norm0$pairs_theta-bayes_a_post_mean)^2)
+    MSE_bayes_b[i] <- mean((norm0$pairs_theta-bayes_b_post_mean)^2)
+    MSE_EB[i] <- mean((norm0$pairs_theta-EB_post_mean)^2)
+  }
+  MSE <- cbind(MSE_bayes_a, MSE_bayes_b, MSE_EB, MSE_NP)
+  return(MSE)
+}
+```
+
+```{r}
+set.seed(1234)
+p = 1000
+sigma = 1
+mu <- 0
+tau <- 1
+numrep <- 1000
+MSE_bayes_a_total <- data.frame(matrix(nrow=p))
+MSE_bayes_b_total <- data.frame(matrix(nrow=p))
+MSE_EB_total <- data.frame(matrix(nrow=p))
+MSE_NP_total <- data.frame(matrix(nrow=p))
+
+for (i in 1:numrep) {
+  test_p <- case_1_p(p,sigma,mu,tau)
+  MSE_bayes_a_total[,i] <- test_p[,1]
+  MSE_bayes_b_total[,i] <- test_p[,2]
+  MSE_EB_total[,i] <- test_p[,3]
+  MSE_NP_total[,i] <- test_p[,4]
+}
 
 ```
 
-### Case 2. Same setup as Case 1 but with varying mu_i for each theta_i
+```{r}
+MSE_bayes_a_total_mean <- rowMeans(MSE_bayes_a_total)
+MSE_bayes_b_total_mean <- rowMeans(MSE_bayes_b_total)
+MSE_EB_total_mean <- rowMeans(MSE_EB_total)
+MSE_NP_total_mean <- rowMeans(MSE_NP_total)
+```
+
+```{r}
+MSE_bayes_a_total_se <- transform(MSE_bayes_a_total, SD=apply(MSE_bayes_a_total,1, sd, na.rm = TRUE))[,c(1001)]
+MSE_bayes_b_total_se <- transform(MSE_bayes_b_total, SD=apply(MSE_bayes_b_total,1, sd, na.rm = TRUE))[,c(1001)]
+MSE_EB_total_se <- transform(MSE_EB_total, SD=apply(MSE_EB_total,1, sd, na.rm = TRUE))[,c(1001)]
+MSE_NP_total_se <- transform(MSE_NP_total, SD=apply(MSE_NP_total,1, sd, na.rm = TRUE))[,c(1001)]
+```
+```{r}
+n_ci <- sqrt(1000)
+MSE_bayes_a_total_ci <- data.frame(lower=MSE_bayes_a_total_mean-1.96*MSE_bayes_a_total_se/n_ci,upper=MSE_bayes_a_total_mean+1.96*MSE_bayes_a_total_se/n_ci)
+MSE_bayes_b_total_ci <- data.frame(lower=MSE_bayes_b_total_mean-1.96*MSE_bayes_b_total_se/n_ci,upper=MSE_bayes_b_total_mean+1.96*MSE_bayes_b_total_se/n_ci)
+MSE_EB_total_ci <- data.frame(lower=MSE_EB_total_mean-1.96*MSE_EB_total_se/n_ci,upper=MSE_EB_total_mean+1.96*MSE_EB_total_se/n_ci)
+MSE_NP_total_ci <- data.frame(lower=MSE_NP_total_mean-1.96*MSE_NP_total_se/n_ci,upper=MSE_NP_total_mean+1.96*MSE_NP_total_se/n_ci)
+```
+
+```{r}
+test_n_1 <- seq(from=1,to =1000, by =1)
+plot_data_mean <- data.frame(test_n_1, MSE_bayes_a_total_mean,MSE_bayes_b_total_mean,MSE_EB_total_mean,MSE_NP_total_mean)
+```
+
+```{r}
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN1_RR_mag1.png",width=600, height=350)
+ggplot(plot_data_mean, aes(x=test_n_1)) + geom_line(aes(y=MSE_bayes_a_total_mean,color="Group 1", linetype="Group 1"),size=0.7) + geom_line(aes(y=MSE_bayes_b_total_mean,color="Group 2", linetype="Group 2"),size=0.7) + geom_line(aes(y=MSE_EB_total_mean,color="Group 3", linetype="Group 3"),size=0.7) + geom_line(aes(y=MSE_NP_total_mean,color="Group 4", linetype="Group 4"),size=0.7) +  labs(title = "Varying Number of samples", x = "Number of samples",y = "Average MSE") +
+  scale_color_manual(values = c("red", "orange", "blue", "purple"),
+                     name = "Groups",
+                     labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB")) +
+  scale_linetype_manual(values = c("solid", "dotdash", "twodash", "dotted"),
+                        name = "Groups",
+                        labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB"))+ geom_ribbon(aes(ymin=MSE_bayes_a_total_ci$lower, ymax=MSE_bayes_a_total_ci$upper), linetype=3, alpha=0.2, fill="red")+ geom_ribbon(aes(ymin=MSE_bayes_b_total_ci$lower, ymax=MSE_bayes_b_total_ci$upper), linetype=5, alpha=0.2, fill="orange")+ geom_ribbon(aes(ymin=MSE_EB_total_ci$lower, ymax=MSE_EB_total_ci$upper), linetype=2, alpha=0.2, fill="blue")+ geom_ribbon(aes(ymin=MSE_NP_total_ci$lower, ymax=MSE_NP_total_ci$upper), linetype=2, alpha=0.2, fill="purple")#+ylim(0.05,0.30)+xlim(4,15)
+dev.off()
+
+```
+
+```{r}
+
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN1_R_n.png",
+    width=600, height=350)
+ggplot(plot_data_mean, aes(x=test_n_1)) + geom_line(aes(y=MSE_bayes_a_total_mean,color="Group 1", linetype="Group 1"),size=1) + geom_line(aes(y=MSE_bayes_b_total_mean,color="Group 2", linetype="Group 2"),size=1) + geom_line(aes(y=MSE_EB_total_mean,color="Group 3", linetype="Group 3"),size=1) + geom_line(aes(y=MSE_NP_total_mean,color="Group 4", linetype="Group 4"),size=1) +  labs(title = "Varying Number of samples", x = "Number of samples",y = "Average MSE") +
+  scale_color_manual(values = c("red", "blue", "green4", "purple"),
+                     name = "Groups",
+                     labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB")) +
+  scale_linetype_manual(values = c("solid", "dashed", "dotted", "dotdash"),
+                        name = "Groups",
+                        labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB"))
+dev.off()
+
+```
+
+
+```{r}
+test_ext_n_1 <- seq(from=1,to =1000, by =1)
+plot_data_ext_mean <- data.frame(test_ext_n_1, MSE_bayes_a_total_ext_mean,MSE_bayes_b_total_ext_mean,MSE_EB_total_ext_mean,MSE_NP_total_ext_mean)
+```
+
+
+```{r}
+test_p_1 <- seq(from=1,to =10000, by =1)
+plot(x=test_p_1,y=MSE_bayes_a_total_mean, type="l", pch=0)
+png(file="/Users/hjkoo/Desktop/8053 Final Project/Plots/NN1_R.png",
+width=600, height=350)
+plot(x=test_p_1, y=MSE_bayes_b_total_mean, col="blue", pch=1, type="l",ylim=range(c(MSE_bayes_b_total_mean,MSE_NP_total_mean)), xlab = "Number of Samples", ylab="MSE", main="Varying number of samples")
+legend("topright",legend=c("Bayes-Normal", "Bayes-Improper","EB","NP"),
+       col=c("Green", "Blue", "Red","Orange"),pch=c(0,1,2,3), lty=1, cex=0.8)
+lines(x=test_p_1, y=MSE_bayes_EB_total_mean, col="red", pch=0)
+lines(x=test_p_1, y=MSE_bayes_a_total_mean, col="green",pch=2)
+lines(x=test_p_1, y=MSE_NP_total_mean, col="orange",pch=3)
+dev.off()
+```
+
+```{r}
+test_p_1 <- cbind(test_p,seq(from=1,to =10000, by =1))
+plot(x=test_p_1[,4],y=test_p_1[,1], type="l")
+png(file="/Users/hjkoo/Desktop/8053 Final Project/Plots/NN1_R.png",
+width=600, height=350)
+plot(x=test_p_1[,4], y=test_p_1[,2], col="blue", pch=0, type="l",ylim=range(c(test_p_1[,2],test_p_1[,3])), xlab = "Number of Samples", ylab="MSE", main="Varying number of samples")
+legend("topright",legend=c("Bayes-Normal", "Bayes-Improper","EB"),
+       col=c("Green", "Blue", "Red"), lty=1, cex=0.8)
+lines(x=test_p_1[,4], y=test_p_1[,3], col="red")
+lines(x=test_p_1[,4], y=test_p_1[,1], col="green")
+dev.off()
+plot(x=test_p_1[,4], y=test_p_1[,3], col="red", type ="l")
+```
+
+```{r}
+set.seed(1234)
+test <- case_1(10000,sigma,mu,tau)
+```
+
+```{r}
+set.seed(1234)
+sigma = 1
+mu <- seq(1000)
+tau <- 1
+
+p = 1000
+
+numrep <- 1000
+MSE_bayes_a_total_mu <- data.frame(matrix(nrow=p))
+MSE_bayes_b_total_mu <- data.frame(matrix(nrow=p))
+MSE_EB_total_mu <- data.frame(matrix(nrow=p))
+MSE_NP_total_mu <- data.frame(matrix(nrow=p))
+
+for (i in 1:numrep) {
+  test_mu <- case_1_mu(10000,sigma,mu,tau)
+  MSE_bayes_a_total_mu[,i] <- test_mu[,1]
+  MSE_bayes_b_total_mu[,i] <- test_mu[,2]
+  MSE_EB_total_mu[,i] <- test_mu[,3]
+  MSE_NP_total_mu[,i] <- test_mu[,4]
+}
+
+```
+
+```{r}
+MSE_bayes_a_total_mu_mean <- rowMeans(MSE_bayes_a_total_mu)
+MSE_bayes_b_total_mu_mean <- rowMeans(MSE_bayes_b_total_mu)
+MSE_EB_total_mu_mean <- rowMeans(MSE_EB_total_mu)
+MSE_NP_total_mu_mean <- rowMeans(MSE_NP_total_mu)
+```
+
+```{r}
+test_mu_1 <- seq(from=1,to =1000, by =1)
+plot(x=test_mu_1,y=MSE_bayes_a_total_mu_mean, type="l")
+png(file="/Users/hjkoo/Desktop/8053 Final Project/Plots/NN1_1_R.png",
+width=600, height=350)
+plot(x=test_mu_1, y=MSE_bayes_b_total_mu_mean, col="blue",pch=1, type="l",ylim=range(c(MSE_bayes_b_total_mu_mean,MSE_bayes_NP_total_mu_mean)), xlab = "mu", ylab="MSE", main="Varying mu values")
+legend("topright",legend=c("Bayes-Normal", "Bayes-Improper","EB"),
+       col=c("Green", "Blue", "Red","Orange"),pch=c(0,1,2,3), lty=1, cex=0.8)
+lines(x=test_mu_1, y=MSE_EB_total_mu_mean, col="red",pch=2)
+lines(x=test_mu_1, y=MSE_bayes_a_total_mu_mean, col="green",pch=0)
+lines(x=test_mu_1, y=MSE_bayes_a_total_mu_mean, col="orange",pch=3)
+dev.off()
+```
+
+```{r}
+test_mu_1 <- cbind(test_mu,seq(from=1,to =1000, by =1))
+plot(x=test_mu_1[,4],y=test_mu_1[,1], type="l")
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN1_1.png",
+width=600, height=350)
+plot(x=test_mu_1[,4], y=test_mu_1[,2], col="blue", type="l",ylim=range(c(test_mu_1[,2],test_mu_1[,3])), xlab = "mu", ylab="MSE", main="Varying mu values")
+legend("topright",legend=c("Bayes-Normal", "Bayes-Improper","EB","NP"),
+       col=c("Green", "Blue", "Red"), lty=1, cex=0.8)
+lines(x=test_mu_1[,4], y=test_mu_1[,3], col="red")
+lines(x=test_mu_1[,4], y=test_mu_1[,1], col="green")
+dev.off()
+plot(x=test_mu_1[,4], y=test_mu_1[,3], col="red", type ="l")
+```
+
+```{r}
+set.seed(1234)
+sigma = 1
+mu <- 1
+tau <- seq(from=1, to = 10, by = 0.1)
+p = 1000
+
+numrep <- 1000
+MSE_bayes_a_total_tau <- data.frame(matrix(nrow=length(tau)))
+MSE_bayes_b_total_tau <- data.frame(matrix(nrow=length(tau)))
+MSE_EB_total_tau <- data.frame(matrix(nrow=length(tau)))
+MSE_NP_total_tau <- data.frame(matrix(nrow=length(tau)))
+
+for (i in 1:numrep) {
+  test_tau <- case_1_tau(10000,sigma,mu,tau)
+  MSE_bayes_a_total_tau[,i] <- test_tau[,1]
+  MSE_bayes_b_total_tau[,i] <- test_tau[,2]
+  MSE_EB_total_tau[,i] <- test_tau[,3]
+  MSE_NP_total_tau[,i] <- test_tau[,4]
+}
+```
+
+```{r}
+MSE_bayes_a_total_tau_mean <- rowMeans(MSE_bayes_a_total_tau)
+MSE_bayes_b_total_tau_mean <- rowMeans(MSE_bayes_b_total_tau)
+MSE_EB_total_tau_mean <- rowMeans(MSE_EB_total_tau)
+MSE_NP_total_tau_mean <- rowMeans(MSE_NP_total_tau)
+```
+
+```{r}
+test_tau_1 <- seq(from=1, to = 10, by = 0.1)
+plot_data_tau_mean <- data.frame(test_tau_1, MSE_bayes_a_total_tau_mean,MSE_bayes_b_total_tau_mean,MSE_EB_total_tau_mean,MSE_NP_total_tau_mean)
+```
+
+```{r}
+
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN1_R_tau.png",
+    width=600, height=350)
+ggplot(plot_data_tau_mean, aes(x=test_tau_1)) + geom_line(aes(y=MSE_bayes_a_total_tau_mean,color="Group 1", linetype="Group 1"),size=1) + geom_line(aes(y=MSE_bayes_b_total_tau_mean,color="Group 2", linetype="Group 2"),size=1) + geom_line(aes(y=MSE_EB_total_tau_mean,color="Group 3", linetype="Group 3"),size=1) + geom_line(aes(y=MSE_NP_total_tau_mean,color="Group 4", linetype="Group 4"),size=1) +  labs(title = "Varying tau", x = expression(tau),y = "Average MSE") +
+  scale_color_manual(values = c("red", "blue", "green4", "purple"),
+                     name = "Groups",
+                     labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB")) +
+  scale_linetype_manual(values = c("solid", "dashed", "dotted", "dotdash"),
+                        name = "Groups",
+                        labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB"))
+dev.off()
+
+```
+
+```{r}
+
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN1_R_tau_woNP.png",
+    width=600, height=350)
+ggplot(plot_data_tau_mean, aes(x=test_tau_1)) + geom_line(aes(y=MSE_bayes_a_total_tau_mean,color="Group 1", linetype="Group 1"),size=1) + geom_line(aes(y=MSE_bayes_b_total_tau_mean,color="Group 2", linetype="Group 2"),size=1) + geom_line(aes(y=MSE_EB_total_tau_mean,color="Group 3", linetype="Group 3"),size=1) +  labs(title = "Varying tau", x = expression(tau),y = "Average MSE") +
+  scale_color_manual(values = c("red", "blue", "green4"),
+                     name = "Groups",
+                     labels = c("Normal", "Improper", "Parametric EB")) +
+  scale_linetype_manual(values = c("solid", "dashed", "dotted"),
+                        name = "Groups",
+                        labels = c("Normal", "Improper", "Parametric EB"))
+dev.off()
+
+```
+
+```{r}
+test_tau_1 <- seq(from=1,to =10, by =0.1)
+plot(x=test_tau_1,y=MSE_bayes_a_total_tau_mean, type="l")
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN1_2_R.png",
+width=600, height=350)
+plot(x=test_tau_1, y=MSE_bayes_b_total_tau_mean, col="blue",pch=1, type="l",ylim=range(c(MSE_bayes_b_total_tau_mean,MSE_NP_total_tau_mean)), xlab = "tau", ylab="MSE", main="Varying tau values")
+legend("topright",legend=c("Bayes-Normal", "Bayes-Improper","EB","NP"),
+       col=c("Green", "Blue", "Red","Orange"),pch=c(0,1,2,3), lty=1, cex=0.8)
+
+lines(x=test_tau_1, y=MSE_EB_total_tau_mean, col="red",pch=2)
+lines(x=test_tau_1, y=MSE_bayes_a_total_tau_mean, col="green",pch=0)
+lines(x=test_tau_1, y=MSE_NP_total_tau_mean, col="orange",pch=3)
+dev.off()
+```
+
+```{r}
+test_tau_1 <- cbind(test_tau,seq(from=1,to =100, by =1))
+plot(x=test_tau_1[,4],y=test_tau_1[,1], type="l")
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN1_2.png",
+width=600, height=350)
+plot(x=test_tau_1[,4], y=test_tau_1[,2], col="blue", type="l",ylim=range(c(test_tau_1[,2],test_tau_1[,3])), xlab = "tau", ylab="MSE", main="Varying tau values")
+legend("topright",legend=c("Bayes-Normal", "Bayes-Improper","EB"),
+       col=c("Green", "Blue", "Red"), lty=1, cex=0.8)
+
+lines(x=test_tau_1[,4], y=test_tau_1[,3], col="red")
+lines(x=test_tau_1[,4], y=test_tau_1[,1], col="green")
+dev.off()
+plot(x=test_tau_1[,4], y=test_tau_1[,3], col="red", type ="l")
+```
+
+
+### Case 1 extended. Same setup as Case 1 but with multiple samples of the same size
+
+$X_{ij} \sim N(\theta_i, \sigma^2)$ for $j=1,...,n$ where $\theta_i \sim N(\mu, \tau^2)$ for $i=1,...,p$.
+
+(a) Bayesian case, Let $\theta_i \sim N(\mu,\tau^2)$ (correct prior) where $\mu,\tau^2$ are both known.
+
+(b) Bayesian case, Let $p(\theta_i)=1$ (improper prior). 
+
+(c) Empirical Bayes. $\mu, \tau^2$ are both unknown and will be estimated from the data.
+
+(d) Nonparametric Empirical Bayes - using kernel density estimation
+ 
+Our goal is to estimate $E(\theta_i|X_i)$, i.e. the posterior mean. 
+
+Sampling in pairs $(X_i, \theta_i)$.
+
+Posterior mean of Bayesian approach (a): $\frac{n\tau^2}{n\tau^2+\sigma^2}\bar{X_i}+\frac{\sigma^2}{n\tau^2+\sigma^2}\mu$
+
+Posterior mean of Bayesian approach (b): $\bar{X_i}$
+
+Posterior mean of Empirical Bayes: $(1-\frac{(p-3)\sigma^2}{\sum(\bar{X_i}-\bar{X})^2})\bar{X_i}+\frac{(p-3)\sigma^2}{\sum(\bar{X_i}-\bar{X})^2}\bar{X}$
+
+```{r}
+norm_gen_list <- function(n,sigma, mu, tau) {
+  # Get theta
+  theta_sample <- rnorm(1, mean=mu, sd = tau)
+  xi <- rnorm(n, mean = theta_sample, sd=sigma)
+  list_t <- list(theta_sample, xi) # first element: theta, second element: Xis
+  return(list_t)
+}
+```
+
+```{r}
+nl <- norm_gen_list(100, sigma, mu, tau)
+```
+
+Now writing a function to do everything together with varying sample sizes.
+```{r}
+case_1_ext <- function(n,p,sigma,mu,tau) {
+  X <- c()
+  bayes_a_post_mean <- c()
+  bayes_b_post_mean <- c()
+  EB_post_mean <- c()
+  theta <- c()
+  for (k in 1:p) {
+    norm0 <- norm_gen_list(n, sigma, mu, tau) # simulate n Xis
+    X <- cbind(X,norm0[[2]]) # store in X
+    theta[k] <- norm0[[1]] # store theta
+    bayes_a_post_mean[k] <- (n*tau^2/(n*tau^2+sigma^2))*mean(norm0[[2]]) + (sigma^2/(n*tau^2+sigma^2))*mu
+    bayes_b_post_mean[k] <- mean(norm0[[2]])
+    }
+    s2 <- sum((colMeans(X)-mean(as.matrix(X)))^2)
+    num <- (p-3)*(sigma^2)
+    ratio <- num/s2 
+    EB_post_mean <- (1-ratio)*colMeans(X)+(ratio)*mean(as.matrix(X))
+    MSE_bayes_a <- mean((theta-bayes_a_post_mean)^2)
+    MSE_bayes_b <- mean((theta-bayes_b_post_mean)^2)
+    MSE_EB <- mean((theta-EB_post_mean)^2)
+  MSE <- cbind(MSE_bayes_a, MSE_bayes_b, MSE_EB)
+  return(MSE)
+}
+```
+
+```{r}
+set.seed(1234)
+n=2
+p = 30
+sigma = 1
+mu=1
+tau=1
+X <- c()
+theta <- c()
+bayes_a_post_mean <- c()
+bayes_b_post_mean <- c()
+EB_post_mean <- c()
+for (k in 1:p) {
+    norm0 <- norm_gen_list(n, sigma, mu, tau) # simulate n Xis
+    X <- cbind(X,norm0[[2]]) # store in X
+    theta[k] <- norm0[[1]] # store theta
+    bayes_a_post_mean[k] <- (n*tau^2/(n*tau^2+sigma^2))*mean(norm0[[2]]) + (sigma^2/(n*tau^2+sigma^2))*mu
+    bayes_b_post_mean[k] <- mean(norm0[[2]])
+    }
+    s2 <- sum((colMeans(X)-mean(as.matrix(X)))^2)
+    num <- (p-3)*(sigma^2)
+    ratio <- num/s2 
+    EB_post_mean <- ((1-ratio)*colMeans(X))+(ratio*mean(as.matrix(X)))
+    MSE_bayes_a <- mean((theta-bayes_a_post_mean)^2)
+    MSE_bayes_b <- mean((theta-bayes_b_post_mean)^2)
+    MSE_EB <- mean((theta-EB_post_mean)^2)
+  MSE <- cbind(MSE_bayes_a, MSE_bayes_b, MSE_EB)
+#test1 <- case_1_ext(n,p,sigma,mu,tau)
+```
+
+```{r}
+case_1_ext_n <- function(n,p,sigma,mu,tau) {
+  MSE_bayes_a <- c()
+  MSE_bayes_b <- c()
+  MSE_EB <- c()
+  MSE_NP <- c()
+  for (i in 1:n) {
+    X <- c()
+    theta <- c()
+    bayes_a_post_mean <- c()
+    bayes_b_post_mean <- c()
+    EB_post_mean <- c()
+    np_est <- c()
+    for (k in 1:p) {
+    norm0 <- norm_gen_list(i, sigma, mu, tau) # simulate n Xijs
+    X <- cbind(X,norm0[[2]]) # store in X
+    theta[k] <- norm0[[1]] # store theta
+    bayes_a_post_mean[k] <- (i*tau^2/(i*tau^2+sigma^2))*mean(norm0[[2]]) + (sigma^2/(i*tau^2+sigma^2))*mu
+    bayes_b_post_mean[k] <- mean(norm0[[2]])
+    #scores_ordered <- sort(norm0[[2]])
+    #fx <- kde(scores_ordered,h=2, eval.points = scores_ordered)
+    #fx_d <- kdde(scores_ordered,h=2, deriv.order = 1, eval.points = scores_ordered)
+      
+    #score <- fx_d$estimate/fx$estimate
+      
+    ## Tweedie's formula (E(\theta|X) = x+sigma^2*score(x))
+    #np_est[k] <- mean(fx$eval.points+sigma^2*score)
+      
+    #theta_hat_raw <- fx$eval.points+sigma^2*score
+    }
+    s2 <- i*sum((colMeans(X)-mean(as.matrix(X)))^2)
+    num <- (p-3)*(sigma^2)
+    ratio <- num/s2 
+    EB_post_mean <- (1-ratio)*colMeans(X)+(ratio)*mean(as.matrix(X))
+    
+    scores_ordered <- sort(X)
+    fx <- kde(scores_ordered,h=2, eval.points = colMeans(X))
+    fx_d <- kdde(scores_ordered,h=2, deriv.order = 1, eval.points = colMeans(X))
+      
+    score <- fx_d$estimate/fx$estimate
+      
+    ## Tweedie's formula (E(\theta|X) = x+sigma^2*score(x))
+    np_est[k] <- mean(fx$eval.points+sigma^2*score)
+      
+    theta_hat_raw <- fx$eval.points+sigma^2*score
+    
+    MSE_bayes_a[i] <- mean((theta-bayes_a_post_mean)^2)
+    MSE_bayes_b[i] <- mean((theta-bayes_b_post_mean)^2)
+    MSE_EB[i] <- mean((theta-EB_post_mean)^2)
+    MSE_NP[i] <- mean((theta-theta_hat_raw)^2)
+  }
+  MSE <- cbind(MSE_bayes_a, MSE_bayes_b, MSE_EB, MSE_NP)
+  return(MSE)
+}
+```
+
+
+```{r}
+set.seed(1234)
+sigma = 1
+mu <- 1
+n <- 1000
+p <- 10
+tau <- 1
+
+numrep <- 1000
+MSE_bayes_a_total_ext <- data.frame(matrix(nrow=numrep))
+MSE_bayes_b_total_ext <- data.frame(matrix(nrow=numrep))
+MSE_EB_total_ext <- data.frame(matrix(nrow=numrep))
+MSE_NP_total_ext <- data.frame(matrix(nrow=numrep))
+
+for (i in 1:numrep) {
+  test_ext_n <- case_1_ext_n(n,p,sigma,mu,tau)
+  MSE_bayes_a_total_ext[,i] <- test_ext_n[,1]
+  MSE_bayes_b_total_ext[,i] <- test_ext_n[,2]
+  MSE_EB_total_ext[,i] <- test_ext_n[,3]
+  MSE_NP_total_ext[,i] <- test_ext_n[,4]
+}
+
+```
+
+
+```{r}
+MSE_bayes_a_total_ext_mean <- rowMeans(MSE_bayes_a_total_ext)
+MSE_bayes_b_total_ext_mean <- rowMeans(MSE_bayes_b_total_ext)
+MSE_EB_total_ext_mean <- rowMeans(MSE_EB_total_ext)
+MSE_NP_total_ext_mean <- rowMeans(MSE_NP_total_ext)
+```
+
+```{r}
+MSE_bayes_a_total_ext_se <- transform(MSE_bayes_a_total_ext, SD=apply(MSE_bayes_a_total_ext,1, sd, na.rm = TRUE))[,c(1001)]
+MSE_bayes_b_total_ext_se <- transform(MSE_bayes_b_total_ext, SD=apply(MSE_bayes_b_total_ext,1, sd, na.rm = TRUE))[,c(1001)]
+MSE_EB_total_ext_se <- transform(MSE_EB_total_ext, SD=apply(MSE_EB_total_ext,1, sd, na.rm = TRUE))[,c(1001)]
+MSE_NP_total_ext_se <- transform(MSE_NP_total_ext, SD=apply(MSE_NP_total_ext,1, sd, na.rm = TRUE))[,c(1001)]
+```
+```{r}
+n_ci <- sqrt(1000)
+MSE_bayes_a_total_ext_ci <- data.frame(lower=MSE_bayes_a_total_ext_mean-1.96*MSE_bayes_a_total_ext_se/n_ci,upper=MSE_bayes_a_total_ext_mean+1.96*MSE_bayes_a_total_ext_se/n_ci)
+MSE_bayes_b_total_ext_ci <- data.frame(lower=MSE_bayes_b_total_ext_mean-1.96*MSE_bayes_b_total_ext_se/n_ci,upper=MSE_bayes_b_total_ext_mean+1.96*MSE_bayes_b_total_ext_se/n_ci)
+MSE_EB_total_ext_ci <- data.frame(lower=MSE_EB_total_ext_mean-1.96*MSE_EB_total_ext_se/n_ci,upper=MSE_EB_total_ext_mean+1.96*MSE_EB_total_ext_se/n_ci)
+MSE_NP_total_ext_ci <- data.frame(lower=MSE_NP_total_ext_mean-1.96*MSE_NP_total_ext_se/n_ci,upper=MSE_NP_total_ext_mean+1.96*MSE_NP_total_ext_se/n_ci)
+```
+
+```{r}
+test_ext_n_1 <- seq(from=1,to =1000, by =1)
+plot_data_ext_mean <- data.frame(test_ext_n_1, MSE_bayes_a_total_ext_mean,MSE_bayes_b_total_ext_mean,MSE_EB_total_ext_mean,MSE_NP_total_ext_mean)
+```
+
+```{r}
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN2_RR_mag1.png",width=600, height=350)
+ggplot(plot_data_ext_mean, aes(x=test_ext_n_1)) + geom_line(aes(y=MSE_bayes_a_total_ext_mean,color="Group 1", linetype="Group 1"),size=0.7) + geom_line(aes(y=MSE_bayes_b_total_ext_mean,color="Group 2", linetype="Group 2"),size=0.7) + geom_line(aes(y=MSE_EB_total_ext_mean,color="Group 3", linetype="Group 3"),size=0.7) + geom_line(aes(y=MSE_NP_total_ext_mean,color="Group 4", linetype="Group 4"),size=0.7) +  labs(title = "Varying Number of samples within group", x = "Number of samples within group",y = "Average MSE") +
+  scale_color_manual(values = c("red", "orange", "blue", "purple"),
+                     name = "Groups",
+                     labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB")) +
+  scale_linetype_manual(values = c("solid", "dotdash", "twodash", "dotted"),
+                        name = "Groups",
+                        labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB"))+ geom_ribbon(aes(ymin=MSE_bayes_a_total_ext_ci$lower, ymax=MSE_bayes_a_total_ext_ci$upper), linetype=3, alpha=0.2, fill="red")+ geom_ribbon(aes(ymin=MSE_bayes_b_total_ext_ci$lower, ymax=MSE_bayes_b_total_ext_ci$upper), linetype=5, alpha=0.2, fill="orange")+ geom_ribbon(aes(ymin=MSE_EB_total_ext_ci$lower, ymax=MSE_EB_total_ext_ci$upper), linetype=2, alpha=0.2, fill="blue")+ geom_ribbon(aes(ymin=MSE_NP_total_ext_ci$lower, ymax=MSE_NP_total_ext_ci$upper), linetype=2, alpha=0.2, fill="purple")+ylim(0.05,0.30)+xlim(4,15)
+dev.off()
+
+```
+```{r}
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN2_R2.png",
+    width=600, height=350)
+ggplot(plot_data_ext_mean, aes(x=test_ext_n_1)) + geom_line(aes(y=MSE_bayes_a_total_ext_mean,color="Group 1", linetype="Group 1"),size=1) + geom_line(aes(y=MSE_bayes_b_total_ext_mean,color="Group 2", linetype="Group 2"),size=1) + geom_line(aes(y=MSE_EB_total_ext_mean,color="Group 3", linetype="Group 3"),size=1) +   labs(title = "Varying Number of samples within group", x = "Number of samples within group",y = "Average MSE") +
+  scale_color_manual(values = c("red", "blue", "green4"),
+                     name = "Groups",
+                     labels = c("Normal", "Improper", "Parametric EB")) +
+  scale_linetype_manual(values = c("solid", "dashed", "dotted"),
+                        name = "Groups",
+                        labels = c("Normal", "Improper", "Parametric EB"))
+dev.off()
+
+```
+
+```{r}
+test_ext_n_1 <- cbind(test_ext_n,seq(from=1,to =1000, by =1))
+plot(x=test_ext_n_1[,4],y=test_ext_n_1[,1], type="l")
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN2.png",
+width=600, height=350)
+plot(x=test_ext_n_1[,4], y=test_ext_n_1[,2], col="blue", type="l",ylim=range(c(test_ext_n_1[,2],test_ext_n_1[,3])), xlab = "Number of samples within group", ylab="MSE", main="Varying Number of samples within groups")
+legend("topright",legend=c("Bayes-Normal", "Bayes-Improper","EB"),
+       col=c("Green", "Blue", "Red"), lty=1, cex=0.8)
+lines(x=test_ext_n_1[,4], y=test_ext_n_1[,3], col="red")
+lines(x=test_ext_n_1[,4], y=test_ext_n_1[,1], col="green")
+dev.off()
+plot(x=test_ext_n_1[,4], y=test_ext_n_1[,3], col="red", type ="l")
+```
+
+```{r}
+case_1_ext_p <- function(n,p,sigma,mu,tau) {
+  MSE_bayes_a <- c()
+  MSE_bayes_b <- c()
+  MSE_EB <- c()
+  MSE_NP <- c()
+  for (i in 4:p) {
+    X <- c()
+    bayes_a_post_mean <- c()
+    bayes_b_post_mean <- c()
+    EB_post_mean <- c()
+    theta <- c()
+    np_est <- c()
+    for (k in 1:i) {
+    norm0 <- norm_gen_list(n, sigma, mu, tau) # simulate n Xis
+    X <- cbind(X,norm0[[2]]) # store in X
+    theta[k] <- norm0[[1]] # store theta
+    bayes_a_post_mean[k] <- (n*tau^2/(n*tau^2+sigma^2))*mean(norm0[[2]]) + (sigma^2/(n*tau^2+sigma^2))*mu
+    bayes_b_post_mean[k] <- mean(norm0[[2]])
+    
+    #scores_ordered <- sort(norm0[[2]])
+    #fx <- kde(scores_ordered,h=2, eval.points = scores_ordered)
+    #fx_d <- kdde(scores_ordered,h=2, deriv.order = 1, eval.points = scores_ordered)
+      
+    #score <- fx_d$estimate/fx$estimate
+      
+    ## Tweedie's formula (E(\theta|X) = x+sigma^2*score(x))
+    #np_est[k] <- mean(fx$eval.points+sigma^2*score)
+      
+    #theta_hat_raw <- fx$eval.points+sigma^2*score
+    }
+    s2 <- n*sum((colMeans(X)-mean(as.matrix(X)))^2)
+    num <- (i-3)*(sigma^2)
+    ratio <- num/s2 
+    EB_post_mean <- (1-ratio)*colMeans(X)+(ratio)*mean(as.matrix(X))
+    
+    scores_ordered <- sort(X)
+    fx <- kde(scores_ordered,h=2, eval.points = colMeans(X))
+    fx_d <- kdde(scores_ordered,h=2, deriv.order = 1, eval.points = colMeans(X))
+      
+    score <- fx_d$estimate/fx$estimate
+      
+    ## Tweedie's formula (E(\theta|X) = x+sigma^2*score(x))
+    np_est[k] <- mean(fx$eval.points+sigma^2*score)
+      
+    theta_hat_raw <- fx$eval.points+sigma^2*score
+    
+    MSE_bayes_a[i] <- mean((theta-bayes_a_post_mean)^2)
+    MSE_bayes_b[i] <- mean((theta-bayes_b_post_mean)^2)
+    MSE_EB[i] <- mean((theta-EB_post_mean)^2)
+    MSE_NP[i] <- mean((theta-theta_hat_raw)^2)
+  }
+  
+  MSE <- cbind(MSE_bayes_a, MSE_bayes_b, MSE_EB,MSE_NP)
+  return(MSE)
+}
+```
+
+```{r}
+set.seed(1234)
+sigma = 1
+mu <- 1
+n <- 10
+p <- 100
+tau <- 1
+
+
+numrep <- 1000
+MSE_bayes_a_total_ext_p <- data.frame(matrix(nrow=numrep))
+MSE_bayes_b_total_ext_p <- data.frame(matrix(nrow=numrep))
+MSE_EB_total_ext_p <- data.frame(matrix(nrow=numrep))
+MSE_NP_total_ext_p <- data.frame(matrix(nrow=numrep))
+
+for (i in 1:numrep) {
+  test_ext_p <- case_1_ext_p(n,p,sigma,mu,tau)
+  MSE_bayes_a_total_ext_p[,i] <- test_ext_p[,1]
+  MSE_bayes_b_total_ext_p[,i] <- test_ext_p[,2]
+  MSE_EB_total_ext_p[,i] <- test_ext_p[,3]
+  MSE_NP_total_ext_p[,i] <- test_ext_p[,4]
+}
+```
+```{r}
+MSE_bayes_a_total_ext_p_trunc <- MSE_bayes_a_total_ext_p[1:100,]
+MSE_bayes_b_total_ext_p_trunc <- MSE_bayes_b_total_ext_p[1:100,]
+MSE_EB_total_ext_p_trunc <- MSE_EB_total_ext_p[1:100,]
+MSE_NP_total_ext_p_trunc <- MSE_NP_total_ext_p[1:100,]
+```
+
+```{r}
+MSE_bayes_a_total_ext_p_mean <- rowMeans(MSE_bayes_a_total_ext_p_trunc)
+MSE_bayes_b_total_ext_p_mean <- rowMeans(MSE_bayes_b_total_ext_p_trunc)
+MSE_EB_total_ext_p_mean <- rowMeans(MSE_EB_total_ext_p_trunc)
+MSE_NP_total_ext_p_mean <- rowMeans(MSE_NP_total_ext_p_trunc)
+```
+
+
+```{r}
+MSE_bayes_a_total_ext_p_se <- transform(MSE_bayes_a_total_ext_p_trunc, SD=apply(MSE_bayes_a_total_ext_p_trunc,1, sd, na.rm = TRUE))[,c(101)]
+MSE_bayes_b_total_ext_p_se <- transform(MSE_bayes_b_total_ext_p_trunc, SD=apply(MSE_bayes_b_total_ext_p_trunc,1, sd, na.rm = TRUE))[,c(101)]
+MSE_EB_total_ext_p_se <- transform(MSE_EB_total_ext_p_trunc, SD=apply(MSE_EB_total_ext_p_trunc,1, sd, na.rm = TRUE))[,c(101)]
+MSE_NP_total_ext_p_se <- transform(MSE_NP_total_ext_p_trunc, SD=apply(MSE_NP_total_ext_p_trunc,1, sd, na.rm = TRUE))[,c(101)]
+```
+```{r}
+n_ci <- sqrt(100)
+MSE_bayes_a_total_ext_p_ci <- data.frame(lower=MSE_bayes_a_total_ext_p_mean-1.96*MSE_bayes_a_total_ext_p_se/n_ci,upper=MSE_bayes_a_total_ext_p_mean+1.96*MSE_bayes_a_total_ext_p_se/n_ci)
+MSE_bayes_b_total_ext_p_ci <- data.frame(lower=MSE_bayes_b_total_ext_p_mean-1.96*MSE_bayes_b_total_ext_p_se/n_ci,upper=MSE_bayes_b_total_ext_p_mean+1.96*MSE_bayes_b_total_ext_p_se/n_ci)
+MSE_EB_total_ext_p_ci <- data.frame(lower=MSE_EB_total_ext_p_mean-1.96*MSE_EB_total_ext_p_se/n_ci,upper=MSE_EB_total_ext_p_mean+1.96*MSE_EB_total_ext_p_se/n_ci)
+MSE_NP_total_ext_p_ci <- data.frame(lower=MSE_NP_total_ext_p_mean-1.96*MSE_NP_total_ext_p_se/n_ci,upper=MSE_NP_total_ext_p_mean+1.96*MSE_NP_total_ext_p_se/n_ci)
+```
+
+```{r}
+test_ext_p_1 <- seq(from=1,to =100, by =1)
+plot_data_ext_p_mean <- data.frame(test_ext_p_1, MSE_bayes_a_total_ext_p_mean,MSE_bayes_b_total_ext_p_mean,MSE_EB_total_ext_p_mean,MSE_NP_total_ext_p_mean)
+plot_data_ext_p_mean_trunc <- plot_data_ext_p_mean[1:100,]
+```
+
+```{r}
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN2_RR_p_mag1.png",width=600, height=350)
+ggplot(plot_data_ext_p_mean, aes(x=test_ext_p_1)) + geom_line(aes(y=MSE_bayes_a_total_ext_p_mean,color="Group 1", linetype="Group 1"),size=0.7) + geom_line(aes(y=MSE_bayes_b_total_ext_p_mean,color="Group 2", linetype="Group 2"),size=0.7) + geom_line(aes(y=MSE_EB_total_ext_p_mean,color="Group 3", linetype="Group 3"),size=0.7) + geom_line(aes(y=MSE_NP_total_ext_p_mean,color="Group 4", linetype="Group 4"),size=0.7) +  labs(title = "Varying Number of groups", x = "Number of groups",y = "Average MSE") +
+  scale_color_manual(values = c("red", "orange", "blue", "purple"),
+                     name = "Groups",
+                     labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB")) +
+  scale_linetype_manual(values = c("solid", "dotdash", "twodash", "dotted"),
+                        name = "Groups",
+                        labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB"))+ geom_ribbon(aes(ymin=MSE_bayes_a_total_ext_p_ci$lower, ymax=MSE_bayes_a_total_ext_p_ci$upper), linetype=3, alpha=0.2, fill="red")+ geom_ribbon(aes(ymin=MSE_bayes_b_total_ext_p_ci$lower, ymax=MSE_bayes_b_total_ext_p_ci$upper), linetype=5, alpha=0.2, fill="orange")+ geom_ribbon(aes(ymin=MSE_EB_total_ext_p_ci$lower, ymax=MSE_EB_total_ext_p_ci$upper), linetype=2, alpha=0.2, fill="blue")+ geom_ribbon(aes(ymin=MSE_NP_total_ext_p_ci$lower, ymax=MSE_NP_total_ext_p_ci$upper), linetype=2, alpha=0.2, fill="purple")#+ylim(0.05,0.30)+xlim(4,15)
+dev.off()
+
+```
+
+```{r}
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN2_RR_p_mag12.png",width=600, height=350)
+ggplot(plot_data_ext_p_mean, aes(x=test_ext_p_1)) + geom_line(aes(y=MSE_bayes_a_total_ext_p_mean,color="Group 1", linetype="Group 1"),size=0.7) + geom_line(aes(y=MSE_bayes_b_total_ext_p_mean,color="Group 2", linetype="Group 2"),size=0.7) + geom_line(aes(y=MSE_EB_total_ext_p_mean,color="Group 3", linetype="Group 3"),size=0.7) + geom_line(aes(y=MSE_NP_total_ext_p_mean,color="Group 4", linetype="Group 4"),size=0.7) +  labs(title = "Varying Number of groups", x = "Number of groups",y = "Average MSE") +
+  scale_color_manual(values = c("red", "orange", "blue", "purple"),
+                     name = "Groups",
+                     labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB")) +
+  scale_linetype_manual(values = c("solid", "dotdash", "twodash", "dotted"),
+                        name = "Groups",
+                        labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB"))
+dev.off()
+
+```
+
+```{r}
+
+png(file="/Users/hjkoo/Desktop/8053 Final Project/Plots/NN2_p_RR_f2.png",
+    width=600, height=350)
+ggplot(plot_data_ext_p_mean_trunc, aes(x=test_ext_p_1)) + geom_line(aes(y=MSE_bayes_a_total_ext_p_mean,color="Group 1", linetype="Group 1"),size=1) + geom_line(aes(y=MSE_bayes_b_total_ext_p_mean,color="Group 2", linetype="Group 2"),size=1) + geom_line(aes(y=MSE_EB_total_ext_p_mean,color="Group 3", linetype="Group 3"),size=1) + geom_line(aes(y=MSE_NP_total_ext_p_mean,color="Group 4", linetype="Group 4"),size=1) +  labs(title = "Varying Number of groups", x = "Number of groups",y = "Average MSE") +
+  scale_color_manual(values = c("red", "blue", "green4", "purple"),
+                     name = "Groups",
+                     labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB")) +
+  scale_linetype_manual(values = c("solid", "dashed", "dotted", "dotdash"),
+                        name = "Groups",
+                        labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB"))
+dev.off()
+
+```
+```{r}
+
+png(file="/Users/hjkoo/Desktop/8053 Final Project/Plots/NN2_p_RR_f2.png",
+    width=600, height=350)
+ggplot(plot_data_ext_p_mean_trunc, aes(x=test_ext_p_1)) + geom_line(aes(y=MSE_bayes_a_total_ext_p_mean,color="Group 1", linetype="Group 1"),size=1) + geom_line(aes(y=MSE_bayes_b_total_ext_p_mean,color="Group 2", linetype="Group 2"),size=1) + geom_line(aes(y=MSE_EB_total_ext_p_mean,color="Group 3", linetype="Group 3"),size=1) + geom_line(aes(y=MSE_NP_total_ext_p_mean,color="Group 4", linetype="Group 4"),size=1) +  labs(title = "Varying Number of groups", x = "Number of groups",y = "Average MSE") +
+  scale_color_manual(values = c("red", "blue", "green4", "purple"),
+                     name = "Groups",
+                     labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB")) +
+  scale_linetype_manual(values = c("solid", "dashed", "dotted", "dotdash"),
+                        name = "Groups",
+                        labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB"))
+dev.off()
+
+```
+```{r}
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN2_R2.png",
+    width=600, height=350)
+ggplot(plot_data_ext_mean, aes(x=test_ext_n_1)) + geom_line(aes(y=MSE_bayes_a_total_ext_mean,color="Group 1", linetype="Group 1"),size=1) + geom_line(aes(y=MSE_bayes_b_total_ext_mean,color="Group 2", linetype="Group 2"),size=1) + geom_line(aes(y=MSE_EB_total_ext_mean,color="Group 3", linetype="Group 3"),size=1) +   labs(title = "Varying Number of samples within group", x = "Number of samples within group",y = "Average MSE") +
+  scale_color_manual(values = c("red", "blue", "green4"),
+                     name = "Groups",
+                     labels = c("Normal", "Improper", "Parametric EB")) +
+  scale_linetype_manual(values = c("solid", "dashed", "dotted"),
+                        name = "Groups",
+                        labels = c("Normal", "Improper", "Parametric EB"))
+dev.off()
+
+```
+
+```{r}
+test_ext_p0 <- test_ext_p[-1,]
+test_ext_p_1 <- cbind(test_ext_p0,seq(from=1,to =99, by =1))
+plot(x=test_ext_p_1[,4],y=test_ext_p_1[,1], type="l")
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN2_1.png",
+width=600, height=350)
+plot(x=test_ext_p_1[,4], y=test_ext_p_1[,2], col="blue", type="l",ylim=range(c(test_ext_p_1[,2],test_ext_p_1[,4])), xlab = "Number of groups", ylab="MSE", main="Varying Number of groups")
+legend("topright",legend=c("Bayes-Normal", "Bayes-Improper","EB"),
+       col=c("Green", "Blue", "Red"), lty=1, cex=0.8)
+lines(x=test_ext_p_1[,4], y=test_ext_p_1[,3], col="red")
+lines(x=test_ext_p_1[,4], y=test_ext_p_1[,1], col="green")
+dev.off()
+plot(x=test_ext_p_1[,4], y=test_ext_p_1[,3], col="red", type ="l")
+
+plot(x=test_ext_p_1[40:nrow(test_ext_p_1),4], y=test_ext_p_1[40:nrow(test_ext_p_1),2], col="blue", type="l",ylim=range(c(0,10)))
+lines(x=test_ext_p_1[40:nrow(test_ext_p_1),4], y=test_ext_p_1[40:nrow(test_ext_p_1),3], col="red")
+lines(x=test_ext_p_1[40:nrow(test_ext_p_1),4], y=test_ext_p_1[40:nrow(test_ext_p_1),1], col="gray")
+```
+
+```{r}
+case_1_ext_mu <- function(n,p,sigma,mu,tau) {
+  MSE_bayes_a <- c()
+  MSE_bayes_b <- c()
+  MSE_EB <- c()
+  MSE_NP <- c()
+  for (i in 1:length(mu)) {
+    X <- c()
+    bayes_a_post_mean <- c()
+    bayes_b_post_mean <- c()
+    EB_post_mean <- c()
+    theta <- c()
+    np_est <- c()
+    for (k in 1:p) {
+    norm0 <- norm_gen_list(n, sigma, mu[i], tau) # simulate n Xis
+    X <- cbind(X,norm0[[2]]) # store in X
+    theta[k] <- norm0[[1]] # store theta
+    bayes_a_post_mean[k] <- (n*tau^2/(n*tau^2+sigma^2))*mean(norm0[[2]]) + (sigma^2/(n*tau^2+sigma^2))*mu[i]
+    bayes_b_post_mean[k] <- mean(norm0[[2]])
+    
+    scores_ordered <- sort(norm0[[2]])
+    fx <- kde(scores_ordered, eval.points = scores_ordered)
+    fx_d <- kdde(scores_ordered, deriv.order = 1, eval.points = scores_ordered)
+      
+    score <- fx_d$estimate/fx$estimate
+      
+    ## Tweedie's formula (E(\theta|X) = x+sigma^2*score(x))
+    np_est[j] <- mean(fx$eval.points+sigma^2*score)
+      
+    theta_hat_raw <- fx$eval.points+sigma^2*score
+    }
+    s2 <- n*sum((colMeans(X)-mean(as.matrix(X)))^2)
+    num <- (p-3)*(sigma^2)
+    ratio <- num/s2 
+    EB_post_mean <- (1-ratio)*colMeans(X)+(ratio)*mean(as.matrix(X))
+    MSE_bayes_a[i] <- mean((theta-bayes_a_post_mean)^2)
+    MSE_bayes_b[i] <- mean((theta-bayes_b_post_mean)^2)
+    MSE_EB[i] <- mean((theta-EB_post_mean)^2)
+    MSE_NP[i] <- mean((theta-np_est)^2)
+  }
+  
+  MSE <- cbind(MSE_bayes_a, MSE_bayes_b, MSE_EB,MSE_NP)
+  return(MSE)
+}
+```
+
+```{r}
+set.seed(1234)
+sigma = 1
+mu <- seq(1000)
+n <- 10
+p <- 10
+tau <- 1
+
+numrep <- 1000
+MSE_bayes_a_total_ext_mu <- data.frame(matrix(nrow=p))
+MSE_bayes_b_total_ext_mu <- data.frame(matrix(nrow=p))
+MSE_EB_total_ext_mu <- data.frame(matrix(nrow=p))
+MSE_NP_total_ext_mu <- data.frame(matrix(nrow=p))
+
+for (i in 1:numrep) {
+  test_ext_mu <- case_1_ext_mu(n,p,sigma,mu,tau)
+
+  MSE_bayes_a_total_ext_mu[,i] <- test_ext_mu[,1]
+  MSE_bayes_b_total_ext_mu[,i] <- test_ext_mu[,2]
+  MSE_EB_total_ext_mu[,i] <- test_ext_mu[,3]
+  MSE_NP_total_ext_mu[,i] <- test_ext_mu[,4]
+}
+```
+
+```{r}
+test_ext_mu_1 <- cbind(test_ext_mu,seq(from=1,to =1000, by =1))
+plot(x=test_ext_mu_1[,4],y=test_ext_mu_1[,1], type="l")
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN2_2.png",
+width=600, height=350)
+plot(x=test_ext_mu_1[,4], y=test_ext_mu_1[,2], col="blue", type="l",ylim=range(c(0,5)), xlab = "mu", ylab="MSE", main="Varying mu values")
+legend("topright",legend=c("Bayes-Normal", "Bayes-Improper","EB"),
+       col=c("Green", "Blue", "Red"), lty=1, cex=0.8)
+lines(x=test_ext_mu_1[,4], y=test_ext_mu_1[,3], col="red")
+lines(x=test_ext_mu_1[,4], y=test_ext_mu_1[,1], col="green")
+dev.off()
+plot(x=test_ext_mu_1[,4], y=test_ext_mu_1[,3], col="red", type ="l")
+
+```
+
+```{r}
+case_1_ext_tau <- function(n,p,sigma,mu,tau) {
+  MSE_bayes_a <- c()
+  MSE_bayes_b <- c()
+  MSE_EB <- c()
+  MSE_NP <- c()
+  for (i in 1:length(tau)) {
+    X <- c()
+    bayes_a_post_mean <- c()
+    bayes_b_post_mean <- c()
+    EB_post_mean <- c()
+    theta <- c()
+    np_est <- c()
+    for (k in 1:p) {
+    norm0 <- norm_gen_list(n, sigma, mu, tau[i]) # simulate n Xis
+    X <- cbind(X,norm0[[2]]) # store in X
+    theta[k] <- norm0[[1]] # store theta
+    bayes_a_post_mean[k] <- (n*tau[i]^2/(n*tau[i]^2+sigma^2))*mean(norm0[[2]]) + (sigma^2/(n*tau[i]^2+sigma^2))*mu
+    bayes_b_post_mean[k] <- mean(norm0[[2]])
+    scores_ordered <- sort(norm0[[2]])
+    fx <- kde(scores_ordered, eval.points = scores_ordered)
+    fx_d <- kdde(scores_ordered, deriv.order = 1, eval.points = scores_ordered)
+      
+    score <- fx_d$estimate/fx$estimate
+      
+    ## Tweedie's formula (E(\theta|X) = x+sigma^2*score(x))
+    np_est[k] <- mean(fx$eval.points+sigma^2*score)
+      
+    theta_hat_raw <- fx$eval.points+sigma^2*score
+    }
+    s2 <- n*sum((colMeans(X)-mean(as.matrix(X)))^2)
+    num <- (p-3)*(sigma^2)
+    ratio <- num/s2 
+    EB_post_mean <- (1-ratio)*colMeans(X)+(ratio)*mean(as.matrix(X))
+    MSE_bayes_a[i] <- mean((theta-bayes_a_post_mean)^2)
+    MSE_bayes_b[i] <- mean((theta-bayes_b_post_mean)^2)
+    MSE_EB[i] <- mean((theta-EB_post_mean)^2)
+    MSE_NP[i] <- mean((theta-np_est)^2)
+  }
+  
+  MSE <- cbind(MSE_bayes_a, MSE_bayes_b, MSE_EB, MSE_NP)
+  return(MSE)
+}
+```
+
+```{r}
+set.seed(1234)
+sigma = 1
+mu <- 1
+n <- 100
+p <- 100
+tau <- seq(from=1, to = 10, by = 0.1)
+
+numrep <- 1000
+MSE_bayes_a_total_ext_tau <- data.frame(matrix(nrow=91))
+MSE_bayes_b_total_ext_tau <- data.frame(matrix(nrow=91))
+MSE_EB_total_ext_tau <- data.frame(matrix(nrow=91))
+MSE_NP_total_ext_tau <- data.frame(matrix(nrow=91))
+
+for (i in 1:numrep) {
+  test_ext_tau <- case_1_ext_tau(n,p,sigma,mu,tau)
+
+  MSE_bayes_a_total_ext_tau[,i] <- test_ext_tau[,1]
+  MSE_bayes_b_total_ext_tau[,i] <- test_ext_tau[,2]
+  MSE_EB_total_ext_tau[,i] <- test_ext_tau[,3]
+  MSE_NP_total_ext_tau[,i] <- test_ext_tau[,4]
+}
+```
+
+```{r}
+MSE_bayes_a_total_ext_tau_mean <- rowMeans(MSE_bayes_a_total_ext_tau)
+MSE_bayes_b_total_ext_tau_mean <- rowMeans(MSE_bayes_b_total_ext_tau)
+MSE_EB_total_ext_tau_mean <- rowMeans(MSE_EB_total_ext_tau)
+MSE_NP_total_ext_tau_mean <- rowMeans(MSE_NP_total_ext_tau)
+```
+
+```{r}
+test_ext_tau_1 <- seq(from=1, to = 10, by = 0.1)
+plot_data_ext_tau_mean <- data.frame(test_ext_tau_1, MSE_bayes_a_total_ext_tau_mean,MSE_bayes_b_total_ext_tau_mean,MSE_EB_total_ext_tau_mean,MSE_NP_total_ext_tau_mean)
+```
+
+```{r}
+
+png(file="/Users/hjkoo/Desktop/8053 Final Project/Plots/NN2_tau_R.png",
+    width=600, height=350)
+ggplot(plot_data_ext_tau_mean, aes(x=test_ext_tau_1)) + geom_line(aes(y=MSE_bayes_a_total_ext_tau_mean,color="Group 1", linetype="Group 1"),size=1) + geom_line(aes(y=MSE_bayes_b_total_ext_tau_mean,color="Group 2", linetype="Group 2"),size=1) + geom_line(aes(y=MSE_EB_total_ext_tau_mean,color="Group 3", linetype="Group 3"),size=1) + geom_line(aes(y=MSE_NP_total_ext_tau_mean,color="Group 4", linetype="Group 4"),size=1) +  labs(title = "Varying mu", x = expression(mu),y = "Average MSE") +
+  scale_color_manual(values = c("red", "blue", "green4", "purple"),
+                     name = "Groups",
+                     labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB")) +
+  scale_linetype_manual(values = c("solid", "dashed", "dotted", "dotdash"),
+                        name = "Groups",
+                        labels = c("Normal", "Improper", "Parametric EB", "Nonparametric EB"))
+dev.off()
+
+```
+
+```{r}
+test_ext_tau_1 <- cbind(test_ext_mu,seq(from=1,to =1000, by =1))
+plot(x=test_ext_tau_1[,4],y=test_ext_tau_1[,1], type="l")
+png(file="/Users/hjkoo/Desktop/STAT 8053/Project/Plots/NN2_3.png",
+width=600, height=350)
+plot(x=test_ext_tau_1[,4], y=test_ext_tau_1[,2], col="blue", type="l",ylim=range(c(0,5)), xlab = "tau", ylab="MSE", main="Varying tau values")
+legend("topright",legend=c("Bayes-Normal", "Bayes-Improper","EB"),
+       col=c("Green", "Blue", "Red"), lty=1, cex=0.8)
+lines(x=test_ext_tau_1[,4], y=test_ext_tau_1[,3], col="red")
+lines(x=test_ext_tau_1[,4], y=test_ext_tau_1[,1], col="green")
+dev.off()
+plot(x=test_ext_tau_1[,4], y=test_ext_tau_1[,3], col="red", type ="l")
+
+```
+
+```{r}
+plot(x=EB_post_mean, y=bayes_b_post_mean)
+abline(a=0, b=1)
+
+plot(x=EB_post_mean, y=bayes_a_post_mean)
+abline(a=0, b=1)
+```
+
+```{r}
+s2 <- sum((colMeans(X)-mean(as.matrix(X)))^2)
+num <- (p-3)*(sigma^2)
+ratio <- num/s2 
+EB_post_mean <- (1-ratio)*colMeans(X)+(ratio)*mean(as.matrix(X))
+```
+
+```{r}
+test1 <- test[10:10000,]
+test2 <- cbind(test1,seq(from=10,to =10000, by =1))
+plot(x=test2[,4],y=test1[,1], type="l")
+plot(x=test2[,4], y=test1[,2], col="blue", type="l")
+plot(x=test2[,4], y=test1[,3], col="red", type ="l")
+```
+
+
+
+
